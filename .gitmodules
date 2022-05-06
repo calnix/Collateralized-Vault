@@ -7,3 +7,6 @@
 [submodule "lib/chainlink"]
 	path = lib/chainlink
 	url = https://github.com/smartcontractkit/chainlink
+[submodule "lib/WETH10"]
+	path = lib/WETH10
+	url = https://github.com/WETH10/WETH10
