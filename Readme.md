@@ -1,6 +1,8 @@
 # Objective
 Collateralized Vault: contract that acts as a collateralized debt engine
 
+For a full illustrated walkthrough, please see: https://calnix.gitbook.io/solidity-lr/yield-mentorship-2022/5-collateralized-vault
+
 Contract allows users to deposit an asset they own (collateral), 
 to **borrow a different asset**  that the Vault owns (underlying). 
 Exchange rate determined by oracle;
@@ -86,14 +88,6 @@ StateLiquidation (setup price to exceed)
 + testOnlyOwnerCanCallLiquidate
 
 
-
-
-
-
-
-
-
-
 # Deployment
-Node provider:        Alchemy
-Target network:       Ethereum-Goerli
+Node provider: Alchemy
+Target network: Ethereum-Goerli
