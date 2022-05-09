@@ -37,7 +37,7 @@ Underlying: DAI
     - If ETH/DAI price changes such tt **debt_value** *>* **collateral_value**, 
     Vault will erase user records from the contract -> cancelling the user debt, and at the same time stopping that user from withdrawing their collateral.
 
-(https://1733885843-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FTgomzlmn9NrxUY0OQ3cD%2Fuploads%2FfMw1V1lKmxE7suN2JUGs%2FUntitled-2022-05-08-1843.excalidraw.png?alt=media&token=13abcd1e-710c-44c2-ad9d-f804b55bd501)
+![Liquidation](https://1733885843-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FTgomzlmn9NrxUY0OQ3cD%2Fuploads%2FfMw1V1lKmxE7suN2JUGs%2FUntitled-2022-05-08-1843.excalidraw.png?alt=media&token=13abcd1e-710c-44c2-ad9d-f804b55bd501)
 
 # Process
 ## Dependencies
@@ -65,7 +65,8 @@ DAI.sol: https://etherscan.io/address/0x6b175474e89094c44da98b954eedeac495271d0f
 -> line 192: uint(-1) changed to type(uint).max (also on 131, 147)
 
 # Pricing + Decimal scaling
-(https://1733885843-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FTgomzlmn9NrxUY0OQ3cD%2Fuploads%2Ft0KkvBkGt0SWEBZXDo52%2Fimage.png?alt=media&token=0d39a856-7e07-4b40-9c67-f4ae06e9be77)
+
+![Weaving pricing into scaling](https://1733885843-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FTgomzlmn9NrxUY0OQ3cD%2Fuploads%2Ft0KkvBkGt0SWEBZXDo52%2Fimage.png?alt=media&token=0d39a856-7e07-4b40-9c67-f4ae06e9be77)
 
 # Testing 
 ### Action: deposit, borrow, repay, withdraw. liquidated
