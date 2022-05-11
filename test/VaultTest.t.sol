@@ -45,7 +45,7 @@ abstract contract StateZero is Test {
         vm.label(user, "user");
         
         // collateralLevel@80% = 0.8 = 8e17
-        vault = new Vault(address(usdc), address(weth), address(priceFeed), 8*10**17);
+        vault = new Vault(address(usdc), address(weth), address(priceFeed), 8e17);
         vm.label(address(vault), "vault contract");
         
         //usdc.mint(address(vault), 10000*10**18);
@@ -170,7 +170,6 @@ contract StateDepositedTest is StateDeposited {
 
     function testBorrow(uint usdcAmount) public {
         console2.log("User can borrow against collateral provided");
-        
         uint maxDebt = StateZero.getMaxDebt(user);
   
         vm.assume(usdcAmount > 0);
@@ -181,6 +180,8 @@ contract StateDepositedTest is StateDeposited {
 
         vm.prank(user);
         vault.borrow(usdcAmount);
+
+        assertTrue(vault.debts(user) == usdcAmount);
     }
 }
 
@@ -189,11 +190,10 @@ abstract contract StateBorrowed is StateDeposited {
         super.setUp();
 
         // user borrows 1/2 of maxDebt
-        vm.startPrank(user);
         uint halfDebt = StateZero.getMaxDebt(user)/2;
+        vm.prank(user);
         vault.borrow(halfDebt);
         assertTrue(vault.debts(user) == halfDebt);
-        vm.stopPrank();
     }
 }
 
@@ -245,7 +245,38 @@ contract StateBorrowedTest is StateBorrowed {
         vault.repay(repayAmount);   
         vm.stopPrank();
 
+        assertTrue(vault.debts(user) == userDebt - repayAmount);
     }
+
+    //borrow half of max,
+    // change rate, 
+    //1 expect revert on borrowing the other half (because of rate change) 
+    //2 borrow less and it works
+    function testCannotBorrowFurtherOnRateChange() public {
+        console2.log("Exchange rate changes: User is unable to borrow another half of original debt amount due to rate change");
+        priceFeed.updateAnswer(438271330000000*3);
+        uint halfDebt = vault.debts(user);
+
+        vm.prank(user);
+        vm.expectRevert("Insufficient collateral!");
+        vault.borrow(halfDebt);
+    }
+
+    function testBorrowLessAtNewRate() public {
+        console2.log("Exchange rate changes: User is able to borrow a lesser amount of DAI");
+        priceFeed.updateAnswer(438271330000000*3);
+        
+        uint userDebt = vault.debts(user);
+        uint additionalDebt = StateZero.getMaxDebt(user); 
+        
+        vm.expectEmit(true, true, false, true);
+        emit Borrow(address(usdc), user, additionalDebt);
+        
+        vm.prank(user);
+        vault.borrow(additionalDebt);
+        assertTrue(vault.debts(user) == userDebt + additionalDebt);
+    }
+
 }
 
 
@@ -282,5 +313,6 @@ contract StateLiquidatedTest is StateLiquidated {
         vm.expectRevert("Ownable: caller is not the owner");
         vault.liquidation(user);
     }
+   
 }
 
