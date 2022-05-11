@@ -97,7 +97,7 @@ contract StateZeroTest is StateZero {
         vault.deposit(1 ether);
         assertTrue(vault.deposits(user) == 1 ether);
 
-        vm.stopPrank;
+        vm.stopPrank();
     }
 }
 
