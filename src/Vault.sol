@@ -5,6 +5,10 @@ import "lib/chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import "lib/yield-utils-v2/contracts/token/IERC20.sol";
 import "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 
+interface IERC20Decimals is IERC20 {
+    function decimals() external view returns (uint);
+}
+
 contract Vault is Ownable {
 
     ///@dev Vault records collateral deposits of each user
@@ -13,11 +17,9 @@ contract Vault is Ownable {
     ///@dev Vault records debt holdings of each user
     mapping (address => uint) public debts;  
 
-
-    ///@notice ERC20 interface specifying token contract functions
-    ///@dev For constant variables, the value has to be fixed at compile-time, while for immutable, it can still be assigned at construction time.
-    IERC20 public immutable collateral;    
-    IERC20 public immutable debt;  
+    ///@dev ERC20 interface specifying token contract functions
+    IERC20Decimals public immutable collateral;    
+    IERC20Decimals public immutable debt;  
 
     ///@dev Asset Pricefeed interface from Chainlink
     AggregatorV3Interface public immutable priceFeed;   
@@ -54,24 +56,27 @@ contract Vault is Ownable {
     ///@param liquidatedCollateralAmount The amount of collateral received by the liquidator
     event Liquidation(address indexed collateralAsset, address indexed debtAsset, address indexed user, uint debtToCover, uint liquidatedCollateralAmount);
     
-    ///@dev To set collateralization level of debt engine
-    ///@notice To allow for margin call at defined level, preventing Vault from bearing risk in fast moving markets
-    uint public immutable bufferDenominator; 
-    uint public immutable bufferNumerator;
+    ///@notice To allow for margined collateralization; similar to FX brokers
+    ///@dev Fixed-point number; to set collateralization level of debt engine
+    /*Note: collateralLevel is a fixed-point number representation of a decimal (e.g. 0.8), | collateralLevel = range(0, 1e18]
+    *       therefore value supplied has to be order of magnitude smaller than the precision of collateral asset itself.
+    *       Example: 1 DAI (1e18) | 80%: 0.8 DAI (8e17) -> therefore, collateralLevel = 8e17
+    */     
+    uint public collateralLevel; 
 
-    ///@dev Returns decimal places of asset prices as dictated by Chainlink Oracle
-    uint public immutable decimals;
+    ///@dev Returns decimal places of price as dictated by Chainlink Oracle
+    uint public immutable scalarFactor;
+
     
-    constructor(address dai_, address weth_, address priceFeedAddress, uint bufferNumerator_, uint bufferDenominator_) {
-        collateral = IERC20(weth_);
-        debt = IERC20(dai_);
+    constructor(address dai_, address weth_, address priceFeedAddress, uint collateralLevel_) {
+        collateral = IERC20Decimals(weth_);
+        debt = IERC20Decimals(dai_);
 
         priceFeed = AggregatorV3Interface(priceFeedAddress);
-        decimals = priceFeed.decimals();
+        scalarFactor = 10**priceFeed.decimals();
 
         // collateralization level
-        bufferNumerator = bufferNumerator_;
-        bufferDenominator = bufferDenominator_;
+        collateralLevel = collateralLevel_;
     }
 
     ///@dev Users deposit collateral asset into Vault
@@ -84,11 +89,11 @@ contract Vault is Ownable {
     }
     
     ///@notice Users borrow debt asset calculated based on collateralization level and their deposits 
-    ///@dev See getMaxDebt() for margined colleteralization colculation
+    ///@dev See getMaxDebt() for colleteralization calculation
     ///@param debtAmount Amount of debt asset to borrow
     function borrow(uint debtAmount) external {             
-        uint maxDebt = getMaxDebt(msg.sender);
-        require(debtAmount <= maxDebt, "Insufficient collateral!");
+        uint collateralRequired = getCollateralRequired(debtAmount);
+        require(collateralRequired < deposits[msg.sender], "Insufficient collateral!");
 
         debts[msg.sender] += debtAmount;
         bool sent = debt.transfer(msg.sender, debtAmount);
@@ -96,17 +101,8 @@ contract Vault is Ownable {
         emit Borrow(address(debt), msg.sender, debtAmount);
     }
 
-    ///@notice Get maximum debt asset borrowable, calculated based on collateralization level
-    ///@dev Collateralization level: bufferNumerator/bufferDenominator (e.g. 8/10 -> 80%) | Think of this as margining
-    ///@param user User address to calculate maximum debt possible based on collateralization level
-    function getMaxDebt(address user) public view returns(uint) {
-        uint availableCollateral = (deposits[user]/bufferDenominator)*bufferNumerator;
-        uint maxDebt = (availableCollateral*10**decimals / get_daiETH_Price());
-        return maxDebt;
-    }
-
-    ///@notice Users repay their debt; in debt asset terms
-    ///@dev This covers partial and full repayment scenarioes
+    ///@notice Users repay their debt, in debt asset terms
+    ///@dev This covers partial and full repayment
     ///@param debtAmount Amount of debt asset to repay
     function repay(uint debtAmount) external {
         debts[msg.sender] -= debtAmount;
@@ -121,10 +117,12 @@ contract Vault is Ownable {
     ///@dev This covers partial and full withdrawal; checks for spare capacity before initiating withdrawal
     ///@param collateralAmount Amount of collateral asset to withdraw
     function withdraw(uint collateralAmount) external {       
-        
-        if (debts[msg.sender] > 0){
-            uint collateralRequired = getCollateralRequired(debts[msg.sender]);
-            uint spareDeposit = deposits[msg.sender] - collateralRequired;
+        uint userDebt = debts[msg.sender];                          // caching this saves an SLOAD
+        uint userDeposit = deposits[msg.sender];                   // caching this saves an SLOAD
+
+        if (userDebt > 0){
+            uint collateralRequired = getCollateralRequired(userDebt);
+            uint spareDeposit = userDeposit - collateralRequired;
             require(collateralAmount < spareDeposit, "Collateral unavailable!");
         }
         
@@ -134,13 +132,19 @@ contract Vault is Ownable {
         emit Withdraw(address(collateral), msg.sender, collateralAmount);            
     }
 
-
+    ///@notice Price is returned as an integer extending over its decimal places
     ///@dev Calculates collateral required to support existing debt position at current market prices 
     ///@param debtAmount Amount of debt asset to support
+    /*Note: Example calculation using collateralLevel (e.g. DAI/WETH):
+    *       baseCollateralRequired = 1 WETH (1e18), collateralLevel = 80% (8e17), scalarFactor = 10**18  (DAI/WETH is 18dp)
+    *       1 WETH (1e18) * 80% (8e17) / 10**18 = 8e(18+17) / 10**18 = 8e17  => 80% of 1 WETH
+    *       Since we want to have a buffer, we will DIVIDE by collateralLevel: 1/0.8 = 1.25 (20% buffer, 80% collateralization level)
+    */
     function getCollateralRequired(uint debtAmount) public view returns(uint) {
-        uint baseCollateralRequired = debtAmount*get_daiETH_Price() / (10**decimals);
-        uint bufferCollateralRequired = (baseCollateralRequired/bufferNumerator)*bufferDenominator;
-        return bufferCollateralRequired;
+        (,int price,,,) = priceFeed.latestRoundData();
+        uint baseCollateralRequired = debtAmount * uint(price) / scalarFactor;
+        uint bufferCollateralRequired = (baseCollateralRequired * scalarFactor) / collateralLevel; 
+        return bufferCollateralRequired = scaleDecimals(bufferCollateralRequired, collateral.decimals(), debt.decimals());
     }
 
     ///@dev Can only be called by Vault owner; triggers liquidation check on supplied user address
@@ -155,12 +159,17 @@ contract Vault is Ownable {
         }
     }
 
-    ///@notice Price is returned as integer extending over its decimal places
-    ///@dev Get current market price of Collateral/Debt asset from Chainlink
-    function get_daiETH_Price() public view returns(uint) {
-        (,int price,,,) = priceFeed.latestRoundData();
-        return uint(price);
+   
+    ///@notice Rebasement is necessary when utilising assets with divergering decimal precision
+    ///@dev For rebasement of the trailing zeros which are representative of decimal precision
+    function scaleDecimals(uint integer, uint from, uint to) public pure returns(uint) {
+        //downscaling | (to-from) => (-ve)
+        if (from > to ){ 
+            return integer * 10**(to-from);
+        } 
+        // upscaling | (to >= from) => +ve
+        else {  
+            return integer * 10**(to - from);
+        }
     }
-    
-
 }
