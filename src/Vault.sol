@@ -56,27 +56,24 @@ contract Vault is Ownable {
     ///@param liquidatedCollateralAmount The amount of collateral received by the liquidator
     event Liquidation(address indexed collateralAsset, address indexed debtAsset, address indexed user, uint debtToCover, uint liquidatedCollateralAmount);
     
-    ///@notice To allow for margined collateralization; similar to FX brokers
-    ///@dev Fixed-point number; to set collateralization level of debt engine
-    /*Note: collateralLevel is a fixed-point number representation of a decimal (e.g. 0.8), | collateralLevel = range(0, 1e18]
-    *       therefore value supplied has to be order of magnitude smaller than the precision of collateral asset itself.
-    *       Example: 1 DAI (1e18) | 80%: 0.8 DAI (8e17) -> therefore, collateralLevel = 8e17
-    */     
-    uint public collateralLevel; 
-
     ///@dev Returns decimal places of price as dictated by Chainlink Oracle
     uint public immutable scalarFactor;
+    
+    ///@dev Returns decimal places of tokens as dictated by their respective contracts
+    uint public collateralDecimals;
+    uint public debtDecimals;
 
     
-    constructor(address dai_, address weth_, address priceFeedAddress, uint collateralLevel_) {
+    constructor(address dai_, address weth_, address priceFeedAddress) {
         collateral = IERC20Decimals(weth_);
         debt = IERC20Decimals(dai_);
 
         priceFeed = AggregatorV3Interface(priceFeedAddress);
         scalarFactor = 10**priceFeed.decimals();
 
-        // collateralization level
-        collateralLevel = collateralLevel_;
+        collateralDecimals = collateral.decimals();
+        debtDecimals = debt.decimals();
+
     }
 
     ///@dev Users deposit collateral asset into Vault
@@ -91,9 +88,10 @@ contract Vault is Ownable {
     ///@notice Users borrow debt asset calculated based on collateralization level and their deposits 
     ///@dev See getMaxDebt() for colleteralization calculation
     ///@param debtAmount Amount of debt asset to borrow
-    function borrow(uint debtAmount) external {             
+    function borrow(uint debtAmount) external {      
         uint collateralRequired = getCollateralRequired(debtAmount);
-        require(collateralRequired < deposits[msg.sender], "Insufficient collateral!");
+        uint availableCollateral = deposits[msg.sender] - getCollateralRequired(debts[msg.sender]);
+        require(collateralRequired < availableCollateral, "Insufficient collateral!");
 
         debts[msg.sender] += debtAmount;
         bool sent = debt.transfer(msg.sender, debtAmount);
@@ -142,9 +140,8 @@ contract Vault is Ownable {
     */
     function getCollateralRequired(uint debtAmount) public view returns(uint) {
         (,int price,,,) = priceFeed.latestRoundData();
-        uint baseCollateralRequired = debtAmount * uint(price) / scalarFactor;
-        uint bufferCollateralRequired = (baseCollateralRequired * scalarFactor) / collateralLevel; 
-        return bufferCollateralRequired = scaleDecimals(bufferCollateralRequired, collateral.decimals(), debt.decimals());
+        uint collateralRequired = debtAmount * uint(price) / scalarFactor;
+        return collateralRequired = scaleDecimals(collateralRequired, collateralDecimals, debtDecimals);
     }
 
     ///@dev Can only be called by Vault owner; triggers liquidation check on supplied user address
@@ -165,11 +162,12 @@ contract Vault is Ownable {
     function scaleDecimals(uint integer, uint from, uint to) public pure returns(uint) {
         //downscaling | (to-from) => (-ve)
         if (from > to ){ 
-            return integer * 10**(to-from);
+            return integer * 10**(to - from);
         } 
         // upscaling | (to >= from) => +ve
         else {  
             return integer * 10**(to - from);
         }
     }
+
 }

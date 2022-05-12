@@ -35,7 +35,7 @@ abstract contract StateZero is Test {
         weth = new WETH9();
         vm.label(address(weth), "weth contract");
 
-        priceFeed = new MockV3Aggregator(18, 438271330000000);
+        priceFeed = new MockV3Aggregator(18, 1e18);
         vm.label(address(priceFeed), "priceFeed contract");
 
         deployer = 0xb4c79daB8f259C7Aee6E5b2Aa729821864227e84;
@@ -45,7 +45,7 @@ abstract contract StateZero is Test {
         vm.label(user, "user");
         
         // collateralLevel@80% = 0.8 = 8e17
-        vault = new Vault(address(usdc), address(weth), address(priceFeed), 8e17);
+        vault = new Vault(address(usdc), address(weth), address(priceFeed));
         vm.label(address(vault), "vault contract");
         
         //usdc.mint(address(vault), 10000*10**18);
@@ -54,13 +54,13 @@ abstract contract StateZero is Test {
         .target(address(usdc))
         .sig(usdc.balanceOf.selector)         //select balanceOf mapping
         .with_key(address(vault))           //set mapping key balanceOf(address(vault))
-        .checked_write(10000*10**18);      //data to be written to the storage slot -> balanceOf(address(vault)) = 10000*10**18
+        .checked_write(100000 * 1e18);      //data to be written to the storage slot -> balanceOf(address(vault)) = 10000*10**18
     }
 
     function getMaxDebt(address user_) public view returns(uint) {
         (,int price,,,) = priceFeed.latestRoundData();
 
-        uint availableCollateral = vault.deposits(user_) * vault.collateralLevel() / vault.scalarFactor();
+        uint availableCollateral = vault.deposits(user_) - vault.getCollateralRequired(vault.debts(user_));
         uint maxDebt = (availableCollateral * vault.scalarFactor() / uint(price));
         maxDebt = vault.scaleDecimals(maxDebt, weth.decimals(), usdc.decimals());
         return maxDebt;
@@ -74,11 +74,11 @@ contract StateZeroTest is StateZero {
     function testVaultHasUsdc() public {
         console2.log("Check Vault has 100 usdc on deployment");
         uint vaultUsdc = usdc.balanceOf(address(vault));
-        assertTrue(vaultUsdc == 10000*10**18);
+        assertTrue(vaultUsdc == 100000 * 1e18);
     }
 
 
-    function testUserDepositsWETH () public {
+    function testUserDepositsWETH() public {
         vm.deal(user, 1 ether);
         vm.startPrank(user);
 
@@ -120,7 +120,7 @@ abstract contract StateDeposited is StateZero {
         
         vm.startPrank(user);
         weth.approve(address(vault), 1 ether);
-        vault.deposit(1 ether);
+        vault.deposit(0.5 ether);
         vm.stopPrank();
     }
 }
@@ -130,7 +130,7 @@ contract StateDepositedTest is StateDeposited {
 
     function testCannotWithdrawInExcess(uint wethAmount) public {
         console2.log("Cannot withdraw in excess of deposits");
-        vm.assume(wethAmount > 1 ether);
+        vm.assume(wethAmount > 0.5 ether);
         vm.prank(user);
         vm.expectRevert(stdError.arithmeticError);
         vault.withdraw(wethAmount);
@@ -139,22 +139,22 @@ contract StateDepositedTest is StateDeposited {
     function testCannotBeLiquidatedWithoutDebt() public {
         console2.log("Cannot be wrongly liquidated with no debt");
         vault.liquidation(user);
-        assertTrue(vault.deposits(user) == 1 ether);
+        assertTrue(vault.deposits(user) == 0.5 ether);
     }
 
     function testCannotBorrowInExcess() public {
         console2.log("Cannot borrow in excess of collateral provided");
         uint maxDebt = StateZero.getMaxDebt(user);       
-
+        
         vm.prank(user);
         vm.expectRevert("Insufficient collateral!");
-        vault.borrow(maxDebt*2);
+        vault.borrow(maxDebt * 2);
     }
 
     function testWithdraw(uint wethAmount) public {
         console2.log("User can withdraw freely in absence of debt");
         vm.assume(wethAmount > 0);
-        vm.assume(wethAmount <= 1 ether);
+        vm.assume(wethAmount <= 0.5 ether);
         
         uint userInitialDeposit = vault.deposits(user);
         vm.prank(user);
@@ -165,15 +165,14 @@ contract StateDepositedTest is StateDeposited {
         vault.withdraw(wethAmount);
 
         assertTrue(vault.deposits(user) == userInitialDeposit - wethAmount);
-        assertTrue(weth.balanceOf(user) == wethAmount);
+        assertTrue(weth.balanceOf(user) == 0.5 ether + wethAmount);
     }
 
     function testBorrow(uint usdcAmount) public {
         console2.log("User can borrow against collateral provided");
         uint maxDebt = StateZero.getMaxDebt(user);
   
-        vm.assume(usdcAmount > 0);
-        vm.assume(usdcAmount <= maxDebt);        
+        vm.assume(usdcAmount > 0 && usdcAmount < maxDebt);
         
         vm.expectEmit(true, true, false, true);
         emit Borrow(address(usdc), user, usdcAmount);
@@ -247,35 +246,78 @@ contract StateBorrowedTest is StateBorrowed {
 
         assertTrue(vault.debts(user) == userDebt - repayAmount);
     }
+}
 
-    //borrow half of max,
-    // change rate, 
-    //1 expect revert on borrowing the other half (because of rate change) 
-    //2 borrow less and it works
+
+abstract contract StateRateChange is StateBorrowed {
+    function setUp() public override virtual {
+        super.setUp();
+
+        // user borrowed 1/2 of maxDebt earlier
+        // price appreciates -> 1 DAI is convertible for double the WETH
+        //1 expect revert on borrowing the other half (because of rate change) 
+        //2 borrow less and it works
+        priceFeed.updateAnswer(1e18 * 2);
+    }
+}
+
+contract StateRateChangeTest is StateRateChange {
+
     function testCannotBorrowFurtherOnRateChange() public {
-        console2.log("Exchange rate changes: User is unable to borrow another half of original debt amount due to rate change");
-        priceFeed.updateAnswer(438271330000000*3);
-        uint halfDebt = vault.debts(user);
+        console2.log("Rate appreciates: User is unable to borrow another half of original debt amount due to rate change");
+        console2.log("Rate appreciates: Twice the amout of collateral is needed to support debt position. No free collateral.");
+
+        uint userDebt = vault.debts(user);
+        uint usedCollateral = vault.getCollateralRequired(userDebt);
+        assertEq(usedCollateral, 0.5 ether);
 
         vm.prank(user);
         vm.expectRevert("Insufficient collateral!");
-        vault.borrow(halfDebt);
+        vault.borrow(0.1 ether);
+
+    }
+}
+
+abstract contract StateRateChange2 is StateRateChange {
+    function setUp() public override virtual {
+        super.setUp();
+
+        // user borrowed 1/2 of maxDebt earlier
+        // price appreciates -> 1 DAI is convertible for double the WETH
+        //1 expect revert on borrowing the other half (because of rate change) 
+        //2 borrow less and it works
+        priceFeed.updateAnswer(1e18 + (1e18 / 4));
     }
 
+    function getMaxDebt2(address user_) public view returns(uint) {
+        (,int price,,,) = priceFeed.latestRoundData();
+
+        uint availableCollateral = vault.deposits(user_) - vault.getCollateralRequired(vault.debts(user_));
+        uint maxDebt = (availableCollateral * vault.scalarFactor() / uint(price));
+        maxDebt = vault.scaleDecimals(maxDebt, weth.decimals(), usdc.decimals());
+        return maxDebt;
+    }
+
+}
+
+contract StateRateChange2Test is StateRateChange2 {
+
     function testBorrowLessAtNewRate() public {
-        console2.log("Exchange rate changes: User is able to borrow a lesser amount of DAI");
-        priceFeed.updateAnswer(438271330000000*3);
+        console2.log("Rate appreciates: User can borrow a lesser amount of DAI than before");
         
-        uint userDebt = vault.debts(user);
-        uint additionalDebt = StateZero.getMaxDebt(user); 
-        
+        uint currentAvailableDebt = StateRateChange2.getMaxDebt2(user); 
+
+        // testing
+        uint collateralRequired = vault.getCollateralRequired(currentAvailableDebt);
+        uint availableCollateral = vault.deposits(user) - vault.getCollateralRequired(vault.debts(user));
+        assertEq(currentAvailableDebt, availableCollateral);
+
         vm.expectEmit(true, true, false, true);
-        emit Borrow(address(usdc), user, additionalDebt);
+        emit Borrow(address(usdc), user, availableCollateral/2);
         
         vm.prank(user);
-        vault.borrow(additionalDebt);
-        assertTrue(vault.debts(user) == userDebt + additionalDebt);
-    }
+        vault.borrow(availableCollateral/2);
+    }   
 
 }
 
@@ -287,15 +329,15 @@ abstract contract StateLiquidated is StateBorrowed {
         // user borrows 1/2 of maxDebt earlier
         // modify price to cause liquidation
         // if 1 WETH is converted to less usdc, at mkt price, Vault will be unable to recover usdc lent
-        // usdc/WETH price must appreciate for liquidation (usdc has devalued against WETH)
-        priceFeed.updateAnswer(386372840000000*10**5);
+        // USDC/WETH price must appreciate for liquidation (usdc has devalued against WETH)
+        priceFeed.updateAnswer(386372840000000 * 1e5);
     }
 }
 
 contract StateLiquidatedTest is StateLiquidated {
 
     function testLiquidationOnPriceAppreciation() public {
-        console2.log("usdc/WETH price appreciated significantly; user should be liquidated");
+        console2.log("Price appreciated significantly: user should be liquidated");
         uint userDebt = vault.debts(user);
         uint userDeposit = vault.deposits(user);
 
@@ -308,7 +350,7 @@ contract StateLiquidatedTest is StateLiquidated {
     }
 
     function testOnlyOwnerCanCallLiquidate() public {
-        console2.log("Only Owner of contract can call liquidate -onlyOwner modifier");
+        console2.log("Only Owner of contract can call liquidate: onlyOwner modifier");
         vm.prank(user);
         vm.expectRevert("Ownable: caller is not the owner");
         vault.liquidation(user);
