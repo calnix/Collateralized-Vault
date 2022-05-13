@@ -57,15 +57,6 @@ abstract contract StateZero is Test {
         .checked_write(100000 * 1e18);      //data to be written to the storage slot -> balanceOf(address(vault)) = 10000*10**18
     }
 
-    function getMaxDebt(address user_) public view returns(uint) {
-        (,int price,,,) = priceFeed.latestRoundData();
-
-        uint availableCollateral = vault.deposits(user_) - vault.getCollateralRequired(vault.debts(user_));
-        uint maxDebt = (availableCollateral * vault.scalarFactor() / uint(price));
-        maxDebt = vault.scaleDecimals(maxDebt, weth.decimals(), usdc.decimals());
-        return maxDebt;
-      }
-
 }
 
 
@@ -144,7 +135,7 @@ contract StateDepositedTest is StateDeposited {
 
     function testCannotBorrowInExcess() public {
         console2.log("Cannot borrow in excess of collateral provided");
-        uint maxDebt = StateZero.getMaxDebt(user);       
+        uint maxDebt = vault.getMaxDebt(user);       
         
         vm.prank(user);
         vm.expectRevert("Insufficient collateral!");
@@ -170,7 +161,7 @@ contract StateDepositedTest is StateDeposited {
 
     function testBorrow(uint usdcAmount) public {
         console2.log("User can borrow against collateral provided");
-        uint maxDebt = StateZero.getMaxDebt(user);
+        uint maxDebt = vault.getMaxDebt(user);
   
         vm.assume(usdcAmount > 0 && usdcAmount < maxDebt);
         
@@ -189,7 +180,7 @@ abstract contract StateBorrowed is StateDeposited {
         super.setUp();
 
         // user borrows 1/2 of maxDebt
-        uint halfDebt = StateZero.getMaxDebt(user)/2;
+        uint halfDebt = vault.getMaxDebt(user)/2;
         vm.prank(user);
         vault.borrow(halfDebt);
         assertTrue(vault.debts(user) == halfDebt);
@@ -200,7 +191,7 @@ contract StateBorrowedTest is StateBorrowed {
 
     function testCannotBorrowExceedingMargin() public {
         console2.log("With existing debt, user should be unable to exceed margin limits");
-        uint maxDebt = StateZero.getMaxDebt(user);       
+        uint maxDebt = vault.getMaxDebt(user);       
         vm.prank(user);
         vm.expectRevert("Insufficient collateral!");
         vault.borrow(maxDebt*2);
@@ -288,35 +279,22 @@ abstract contract StateRateChange2 is StateRateChange {
         //2 borrow less and it works
         priceFeed.updateAnswer(1e18 + (1e18 / 4));
     }
-
-    function getMaxDebt2(address user_) public view returns(uint) {
-        (,int price,,,) = priceFeed.latestRoundData();
-
-        uint availableCollateral = vault.deposits(user_) - vault.getCollateralRequired(vault.debts(user_));
-        uint maxDebt = (availableCollateral * vault.scalarFactor() / uint(price));
-        maxDebt = vault.scaleDecimals(maxDebt, weth.decimals(), usdc.decimals());
-        return maxDebt;
-    }
-
 }
 
 contract StateRateChange2Test is StateRateChange2 {
 
     function testBorrowLessAtNewRate() public {
-        console2.log("Rate appreciates: User can borrow a lesser amount of DAI than before");
+        console2.log("Rate appreciates: User can borrow a lesser amount of DAI than before");        
         
-        uint currentAvailableDebt = StateRateChange2.getMaxDebt2(user); 
-
-        // testing
-        uint collateralRequired = vault.getCollateralRequired(currentAvailableDebt);
-        uint availableCollateral = vault.deposits(user) - vault.getCollateralRequired(vault.debts(user));
-        // assertEq(currentAvailableDebt, availableCollateral);
+        uint maxDebt = vault.getMaxDebt(user); 
+        uint userDebt = vault.debts(user);
 
         vm.expectEmit(true, true, false, true);
-        emit Borrow(address(usdc), user, availableCollateral/2);
+        emit Borrow(address(usdc), user, maxDebt);
         
         vm.prank(user);
-        vault.borrow(availableCollateral/2);
+        vault.borrow(maxDebt);
+        assertTrue(vault.debts(user) == userDebt + maxDebt);
     }   
 
 }

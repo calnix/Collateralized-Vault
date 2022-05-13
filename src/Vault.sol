@@ -5,6 +5,7 @@ import "lib/chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import "lib/yield-utils-v2/contracts/token/IERC20.sol";
 import "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 
+
 interface IERC20Decimals is IERC20 {
     function decimals() external view returns (uint);
 }
@@ -91,7 +92,7 @@ contract Vault is Ownable {
     function borrow(uint debtAmount) external {      
         uint collateralRequired = getCollateralRequired(debtAmount);
         uint availableCollateral = deposits[msg.sender] - getCollateralRequired(debts[msg.sender]);
-        require(collateralRequired < availableCollateral, "Insufficient collateral!");
+        require(collateralRequired <= availableCollateral, "Insufficient collateral!");
 
         debts[msg.sender] += debtAmount;
         bool sent = debt.transfer(msg.sender, debtAmount);
@@ -139,15 +140,6 @@ contract Vault is Ownable {
         return collateralRequired = scaleDecimals(collateralRequired, collateralDecimals, debtDecimals);
     }
 
-    function isCollateralized(uint256 debtAmount) internal view returns (bool) {
-        (,int price,,,) = priceFeed.latestRoundData();
-        uint collateralRequired = debtAmount * uint(price) / scalarFactor;
-        collateralRequired = scaleDecimals(collateralRequired, collateralDecimals, debtDecimals);
-        
-        uint availableCollateral = deposits[msg.sender] - getCollateralRequired(debts[msg.sender]);
-        require(collateralRequired < availableCollateral, "Insufficient collateral!");
-    }
-
     ///@dev Can only be called by Vault owner; triggers liquidation check on supplied user address
     ///@param user Address of user to trigger liquidation check
     function liquidation(address user) public onlyOwner { 
@@ -172,6 +164,15 @@ contract Vault is Ownable {
         else {  
             return integer * 10**(to - from);
         }
+    }
+
+    ///@notice Calculates the maximum possible debt a user can take on at current market prices
+    ///@param user_ Address of user to calculate max debt for 
+    function getMaxDebt(address user_) external view returns(uint maxDebt) {
+        (,int price,,,) = priceFeed.latestRoundData();
+        uint availableCollateral = deposits[user_] - getCollateralRequired(debts[user_]);
+        maxDebt = (availableCollateral * scalarFactor) / uint(price);
+        maxDebt = scaleDecimals(maxDebt, debtDecimals, collateralDecimals);
     }
 
 }
