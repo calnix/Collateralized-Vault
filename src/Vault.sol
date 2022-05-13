@@ -132,15 +132,15 @@ contract Vault is Ownable {
     ///@notice Price is returned as an integer extending over its decimal places
     ///@dev Calculates collateral required to support a debt position, at current market prices 
     ///@param debtAmount Amount of debt 
-    function getCollateralRequired(uint debtAmount) public view returns(uint) {
+    function getCollateralRequired(uint debtAmount) public view returns(uint collateralRequired) {
         (,int price,,,) = priceFeed.latestRoundData();
-        uint collateralRequired = debtAmount * uint(price) / scalarFactor;
-        return collateralRequired = scaleDecimals(collateralRequired, collateralDecimals, debtDecimals);
+        collateralRequired = debtAmount * uint(price) / scalarFactor;
+        collateralRequired = scaleDecimals(collateralRequired, collateralDecimals, debtDecimals);
     }
 
     ///@dev Can only be called by Vault owner; triggers liquidation check on supplied user address
     ///@param user Address of user to trigger liquidation check
-    function liquidation(address user) public onlyOwner { 
+    function liquidation(address user) external onlyOwner { 
         uint collateralRequired = getCollateralRequired(debts[user]);
 
         if (collateralRequired > deposits[user]){
@@ -153,7 +153,7 @@ contract Vault is Ownable {
    
     ///@notice Rebasement is necessary when utilising assets with divergering decimal precision
     ///@dev For rebasement of the trailing zeros which are representative of decimal precision
-    function scaleDecimals(uint integer, uint from, uint to) public pure returns(uint) {
+    function scaleDecimals(uint integer, uint from, uint to) internal pure returns(uint) {
         //downscaling | (to-from) => (-ve)
         if (from > to ){ 
             return integer * 10**(to - from);
