@@ -90,9 +90,7 @@ contract Vault is Ownable {
     ///@dev See getMaxDebt() for colleteralization calculation
     ///@param debtAmount Amount of debt asset to borrow
     function borrow(uint debtAmount) external {      
-        uint collateralRequired = getCollateralRequired(debtAmount);
-        uint availableCollateral = deposits[msg.sender] - getCollateralRequired(debts[msg.sender]);
-        require(collateralRequired <= availableCollateral, "Insufficient collateral!");
+        require(getCollateralRequired(debtAmount + debts[msg.sender]) <= deposits[msg.sender], "Insufficient collateral!");
 
         debts[msg.sender] += debtAmount;
         bool sent = debt.transfer(msg.sender, debtAmount);
