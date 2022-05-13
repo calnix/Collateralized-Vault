@@ -131,17 +131,21 @@ contract Vault is Ownable {
     }
 
     ///@notice Price is returned as an integer extending over its decimal places
-    ///@dev Calculates collateral required to support existing debt position at current market prices 
-    ///@param debtAmount Amount of debt asset to support
-    /*Note: Example calculation using collateralLevel (e.g. DAI/WETH):
-    *       baseCollateralRequired = 1 WETH (1e18), collateralLevel = 80% (8e17), scalarFactor = 10**18  (DAI/WETH is 18dp)
-    *       1 WETH (1e18) * 80% (8e17) / 10**18 = 8e(18+17) / 10**18 = 8e17  => 80% of 1 WETH
-    *       Since we want to have a buffer, we will DIVIDE by collateralLevel: 1/0.8 = 1.25 (20% buffer, 80% collateralization level)
-    */
+    ///@dev Calculates collateral required to support a debt position, at current market prices 
+    ///@param debtAmount Amount of debt 
     function getCollateralRequired(uint debtAmount) public view returns(uint) {
         (,int price,,,) = priceFeed.latestRoundData();
         uint collateralRequired = debtAmount * uint(price) / scalarFactor;
         return collateralRequired = scaleDecimals(collateralRequired, collateralDecimals, debtDecimals);
+    }
+
+    function isCollateralized(uint256 debtAmount) internal view returns (bool) {
+        (,int price,,,) = priceFeed.latestRoundData();
+        uint collateralRequired = debtAmount * uint(price) / scalarFactor;
+        collateralRequired = scaleDecimals(collateralRequired, collateralDecimals, debtDecimals);
+        
+        uint availableCollateral = deposits[msg.sender] - getCollateralRequired(debts[msg.sender]);
+        require(collateralRequired < availableCollateral, "Insufficient collateral!");
     }
 
     ///@dev Can only be called by Vault owner; triggers liquidation check on supplied user address
