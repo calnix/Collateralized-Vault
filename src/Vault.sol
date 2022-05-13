@@ -154,9 +154,9 @@ contract Vault is Ownable {
     ///@notice Rebasement is necessary when utilising assets with divergering decimal precision
     ///@dev For rebasement of the trailing zeros which are representative of decimal precision
     function scaleDecimals(uint integer, uint from, uint to) internal pure returns(uint) {
-        //downscaling | (to-from) => (-ve)
+        //downscaling | 10^(to-from) => 10^(-ve) | cant have negative powers, bring down as division => integer / 10^(from - to)
         if (from > to ){ 
-            return integer * 10**(to - from);
+            return integer / 10**(from - to);
         } 
         // upscaling | (to >= from) => +ve
         else {  
@@ -169,8 +169,8 @@ contract Vault is Ownable {
     function getMaxDebt(address user_) external view returns(uint maxDebt) {
         (,int price,,,) = priceFeed.latestRoundData();
         uint availableCollateral = deposits[user_] - getCollateralRequired(debts[user_]);
-        maxDebt = (availableCollateral * scalarFactor) / uint(price);
-        maxDebt = scaleDecimals(maxDebt, debtDecimals, collateralDecimals);
+        maxDebt = (availableCollateral * scalarFactor) / uint(price);                       
+        maxDebt = scaleDecimals(maxDebt, collateralDecimals, debtDecimals);                 
     }
 
 }
