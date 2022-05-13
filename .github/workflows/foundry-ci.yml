@@ -1,0 +1,25 @@
+name: Foundry-CI
+
+on: 
+  push:
+    branches:
+      - AddedCode
+  pull_request:
+
+jobs:
+  run-tests:                             # job_id value
+    name: Collateralized Vault           # Use jobs.<job_id>.name to a name for the job, which is displayed on GitHub.
+    runs-on: ubuntu-latest              # Container OS env
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: onbjerg/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Run Forge tests
+        run: forge test
+        id: test
