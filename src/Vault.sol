@@ -76,9 +76,9 @@ contract Vault is Ownable {
         debtDecimals = debt.decimals();
     }
 
-    /*/////////////////////////////////////////////////////////////////////////
-                                  TRANSACTIONS
-    /////////////////////////////////////////////////////////////////////////*/
+    /*////////////////////////////////////////////////////////////////////////*/
+    /*                             TRANSACTIONS                               */
+    /*////////////////////////////////////////////////////////////////////////*/
 
     ///@dev Users deposit collateral asset into Vault
     ///@param collateralAmount Amount of collateral to deposit
@@ -129,9 +129,9 @@ contract Vault is Ownable {
     }
 
 
-    /*/////////////////////////////////////////////////////////////////////////
-                                COLLATERALIZATION
-    /////////////////////////////////////////////////////////////////////////*/
+    /*////////////////////////////////////////////////////////////////////////*/
+    /*                           COLLATERALIZATION                            */  
+    /*////////////////////////////////////////////////////////////////////////*/
   
     ///@notice Check if the supplied amount of collateral can support the debt amount, given current market prices
     ///@dev Checks conditionals in return statement sequentially; first if debt is 0, otherwise, check that debt amount can be supported with given collateral
@@ -191,17 +191,21 @@ contract Vault is Ownable {
         }
     }
 
-    /*/////////////////////////////////////////////////////////////////////////
-                                   LIQUIDATIONS
-    /////////////////////////////////////////////////////////////////////////*/
+    /*///////////////////////////////////////////////////////////////////////*/
+    /*                               LIQUIDATIONS                            */  
+    /*///////////////////////////////////////////////////////////////////////*/
 
     ///@dev Can only be called by Vault owner; triggers liquidation check on supplied user address
     ///@param user Address of user to trigger liquidation check
     function liquidation(address user) external onlyOwner { 
-        require(!_isCollateralized(debts[user], deposits[user]), "Not undercollateralized");
+        uint userDebt = debts[user];             //saves an extra SLOAD
+        uint userDeposit = deposits[user];       //saves an extra SLOAD
 
-        emit Liquidation(address(collateral), address(debt), user, debts[user], deposits[user]); 
+        require(!_isCollateralized(userDebt, userDeposit), "Not undercollateralized");
+
         delete deposits[user];
         delete debts[user];
+        emit Liquidation(address(collateral), address(debt), user, userDebt, userDeposit); 
+
     }
 }
