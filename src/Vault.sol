@@ -74,25 +74,30 @@ contract Vault is Ownable {
 
         collateralDecimals = collateral.decimals();
         debtDecimals = debt.decimals();
-
     }
+
+    /*/////////////////////////////////////////////////////////////////////////
+                                  TRANSACTIONS
+    /////////////////////////////////////////////////////////////////////////*/
 
     ///@dev Users deposit collateral asset into Vault
     ///@param collateralAmount Amount of collateral to deposit
     function deposit(uint collateralAmount) external {       
         deposits[msg.sender] += collateralAmount;
+
         bool sent = collateral.transferFrom(msg.sender, address(this), collateralAmount);
         require(sent, "Deposit failed!");  
         emit Deposit(address(collateral), msg.sender, collateralAmount);
     }
     
     ///@notice Users borrow debt asset calculated based on collateralization level and their deposits 
-    ///@dev See getMaxDebt() for colleteralization calculation
+    ///@dev See _isCollateralized() for collateralization calculation
     ///@param debtAmount Amount of debt asset to borrow
     function borrow(uint debtAmount) external {      
-        require(getCollateralRequired(debtAmount + debts[msg.sender]) <= deposits[msg.sender], "Insufficient collateral!");
-
-        debts[msg.sender] += debtAmount;
+        uint newDebt = debts[msg.sender] + debtAmount;
+        require(_isCollateralized(newDebt, deposits[msg.sender]),"Would become undercollateralized");
+        
+        debts[msg.sender] = newDebt;
         bool sent = debt.transfer(msg.sender, debtAmount);
         require(sent, "Borrow failed!");       
         emit Borrow(address(debt), msg.sender, debtAmount);
@@ -111,49 +116,71 @@ contract Vault is Ownable {
 
 
     ///@notice Users withdraw their deposited collateral
-    ///@dev This covers partial and full withdrawal; checks for spare capacity before initiating withdrawal
+    ///@dev This covers partial and full withdrawals; checks if under-collateralization occurs before withdrawal
     ///@param collateralAmount Amount of collateral asset to withdraw
     function withdraw(uint collateralAmount) external {       
-        uint userDebt = debts[msg.sender];                          // caching this saves an SLOAD
-        uint userDeposit = deposits[msg.sender];                   // caching this saves an SLOAD
+        uint newDeposit = deposits[msg.sender] - collateralAmount;
+        require(_isCollateralized(debts[msg.sender], newDeposit),"Would become undercollateralized");
 
-        if (userDebt > 0){
-            uint collateralRequired = getCollateralRequired(userDebt);
-            uint spareDeposit = userDeposit - collateralRequired;
-            require(collateralAmount < spareDeposit, "Collateral unavailable!");
-        }
-        
-        deposits[msg.sender] -= collateralAmount;
+        deposits[msg.sender] = newDeposit;
         bool sent = collateral.transfer(msg.sender, collateralAmount);
         require(sent, "Withdraw failed!");
         emit Withdraw(address(collateral), msg.sender, collateralAmount);            
     }
 
-    ///@notice Price is returned as an integer extending over its decimal places
-    ///@dev Calculates collateral required to support a debt position, at current market prices 
+
+    /*/////////////////////////////////////////////////////////////////////////
+                                COLLATERALIZATION
+    /////////////////////////////////////////////////////////////////////////*/
+  
+    ///@notice Check if the supplied amount of collateral can support the debt amount, given current market prices
+    ///@dev Checks conditionals in return statement sequentially; first if debt is 0, otherwise, check that debt amount can be supported with given collateral
     ///@param debtAmount Amount of debt 
-    function getCollateralRequired(uint debtAmount) public view returns(uint collateralRequired) {
+    ///@param collateralAmount Amount of collateral  
+    ///@return collateralized True is debt can be supported
+    function _isCollateralized(uint debtAmount, uint collateralAmount) internal view returns(bool collateralized) {
+        return debtAmount == 0 || debtAmount <= _collateralToDebt(collateralAmount);
+    }
+        //Note: Conditions are evaluated sequentially.
+        // First check if debtAmount ==0, if so, return TRUE. 
+        // If debtAmount does not equal to 0 (FALSE), proceed to evaluate 2nd conditional
+        // Second conditional checks that debtAmount is less than the max possible debt a user can take on given their deposits. 
+        // If second conditional evaluates to be true, TRUE is returned.
+        // Else, FALSE is returned.
+
+
+    ///@notice Price is returned as an integer extending over it's decimal places
+    ///@dev For a given collateral amount, calculate the debt it can support at current market prices 
+    ///@param collateralAmount Amount of collateral
+    ///@return debtAmount Amount of debt
+    function _collateralToDebt(uint collateralAmount) internal view returns(uint debtAmount) {
         (,int price,,,) = priceFeed.latestRoundData();
-        collateralRequired = debtAmount * uint(price) / scalarFactor;
-        collateralRequired = scaleDecimals(collateralRequired, collateralDecimals, debtDecimals);
+        debtAmount = collateralAmount * scalarFactor / uint(price);
+        debtAmount = _scaleDecimals(debtAmount, debtDecimals, collateralDecimals);
     }
 
-    ///@dev Can only be called by Vault owner; triggers liquidation check on supplied user address
-    ///@param user Address of user to trigger liquidation check
-    function liquidation(address user) external onlyOwner { 
-        uint collateralRequired = getCollateralRequired(debts[user]);
 
-        if (collateralRequired > deposits[user]){
-            emit Liquidation(address(collateral), address(debt), user, debts[user], deposits[user]); 
-            delete deposits[user];
-            delete debts[user];
-        }
+    ///@dev Calculates minimum collateral required of a user to support existing debts, at current market prices 
+    ///@param user Address of user 
+    function minimumCollateral(address user) public view returns(uint collateralAmount) {
+        collateralAmount = _debtToCollateral(debts[user]);
     }
 
-   
+
+    ///@notice Price is returned as an integer extending over it's decimal places
+    ///@dev Calculates minimum collateral required to support given amount of debt, at current market prices 
+    ///@param debtAmount Amount of debt
+    function _debtToCollateral(uint debtAmount) internal view returns(uint collateralAmount) {
+        (,int price,,,) = priceFeed.latestRoundData();
+        collateralAmount = debtAmount * uint(price) / scalarFactor;
+        collateralAmount = _scaleDecimals(collateralAmount, collateralDecimals, debtDecimals);
+    }
+
+
+
     ///@notice Rebasement is necessary when utilising assets with divergering decimal precision
     ///@dev For rebasement of the trailing zeros which are representative of decimal precision
-    function scaleDecimals(uint integer, uint from, uint to) internal pure returns(uint) {
+    function _scaleDecimals(uint integer, uint from, uint to) internal pure returns(uint) {
         //downscaling | 10^(to-from) => 10^(-ve) | cant have negative powers, bring down as division => integer / 10^(from - to)
         if (from > to ){ 
             return integer / 10**(from - to);
@@ -164,13 +191,17 @@ contract Vault is Ownable {
         }
     }
 
-    ///@notice Calculates the maximum possible debt a user can take on at current market prices
-    ///@param user_ Address of user to calculate max debt for 
-    function getMaxDebt(address user_) external view returns(uint maxDebt) {
-        (,int price,,,) = priceFeed.latestRoundData();
-        uint availableCollateral = deposits[user_] - getCollateralRequired(debts[user_]);
-        maxDebt = (availableCollateral * scalarFactor) / uint(price);                       
-        maxDebt = scaleDecimals(maxDebt, collateralDecimals, debtDecimals);                 
-    }
+    /*/////////////////////////////////////////////////////////////////////////
+                                   LIQUIDATIONS
+    /////////////////////////////////////////////////////////////////////////*/
 
+    ///@dev Can only be called by Vault owner; triggers liquidation check on supplied user address
+    ///@param user Address of user to trigger liquidation check
+    function liquidation(address user) external onlyOwner { 
+        require(!_isCollateralized(debts[user], deposits[user]), "Not undercollateralized");
+
+        emit Liquidation(address(collateral), address(debt), user, debts[user], deposits[user]); 
+        delete deposits[user];
+        delete debts[user];
+    }
 }

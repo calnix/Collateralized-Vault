@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import "lib/forge-std/src/Test.sol";
 import "lib/forge-std/src/console2.sol";
 
-import "src/Vault.sol";
+import "test/VaultMock.sol";
 import "test/USDC.sol";
 import "test/WETH.sol";
 import "test/MockV3Aggregator.sol";
@@ -16,7 +16,7 @@ abstract contract StateZero is Test {
     WETH9 public weth;
     MockV3Aggregator public priceFeed;
 
-    Vault public vault;
+    VaultMock public vault;
     address user;
     address deployer;
 
@@ -45,7 +45,7 @@ abstract contract StateZero is Test {
         vm.label(user, "user");
         
         // collateralLevel@80% = 0.8 = 8e17
-        vault = new Vault(address(usdc), address(weth), address(priceFeed));
+        vault = new VaultMock(address(usdc), address(weth), address(priceFeed));
         vm.label(address(vault), "vault contract");
         
         //usdc.mint(address(vault), 10000*10**18);
@@ -53,7 +53,7 @@ abstract contract StateZero is Test {
         stdstore    
         .target(address(usdc))
         .sig(usdc.balanceOf.selector)         //select balanceOf mapping
-        .with_key(address(vault))           //set mapping key balanceOf(address(vault))
+        .with_key(address(vault))            //set mapping key balanceOf(address(vault))
         .checked_write(100000 * 1e18);      //data to be written to the storage slot -> balanceOf(address(vault)) = 10000*10**18
     }
 
@@ -62,8 +62,8 @@ abstract contract StateZero is Test {
 
 contract StateZeroTest is StateZero {
  
-    function testVaultHasUsdc() public {
-        console2.log("Check Vault has 100 usdc on deployment");
+    function testVaultHasUSDC() public {
+        console2.log("Check Vault has 100000 usdc on deployment");
         uint vaultUsdc = usdc.balanceOf(address(vault));
         assertTrue(vaultUsdc == 100000 * 1e18);
     }
@@ -117,7 +117,7 @@ abstract contract StateDeposited is StateZero {
 }
 
 contract StateDepositedTest is StateDeposited {
-    // Vault has 100 usdc & 1 WETH deposited by user
+    // Vault has 100000 usdc & 0.5 WETH deposited by user
 
     function testCannotWithdrawInExcess(uint wethAmount) public {
         console2.log("Cannot withdraw in excess of deposits");
@@ -128,17 +128,19 @@ contract StateDepositedTest is StateDeposited {
     }
 
     function testCannotBeLiquidatedWithoutDebt() public {
-        console2.log("Cannot be wrongly liquidated with no debt");
+        console2.log("Cannot be wrongly liquidated without debt");
+        vm.expectRevert("Not undercollateralized");
         vault.liquidation(user);
         assertTrue(vault.deposits(user) == 0.5 ether);
     }
 
     function testCannotBorrowInExcess() public {
         console2.log("Cannot borrow in excess of collateral provided");
-        uint maxDebt = vault.getMaxDebt(user);       
-        
+        //uint maxDebt = vault.getMaxDebt(user);       
+        uint maxDebt = vault.collateralToDebt(vault.deposits(user));
+
         vm.prank(user);
-        vm.expectRevert("Insufficient collateral!");
+        vm.expectRevert("Would become undercollateralized");
         vault.borrow(maxDebt * 2);
     }
 
@@ -161,16 +163,16 @@ contract StateDepositedTest is StateDeposited {
 
     function testBorrow(uint usdcAmount) public {
         console2.log("User can borrow against collateral provided");
-        uint maxDebt = vault.getMaxDebt(user);
-  
-        vm.assume(usdcAmount > 0 && usdcAmount < maxDebt);
+        //uint maxDebt = vault.getMaxDebt(user);
+        uint maxDebt = vault.collateralToDebt(vault.deposits(user));
+
+        usdcAmount = bound(usdcAmount, 0, maxDebt);
         
         vm.expectEmit(true, true, false, true);
         emit Borrow(address(usdc), user, usdcAmount);
 
         vm.prank(user);
         vault.borrow(usdcAmount);
-
         assertTrue(vault.debts(user) == usdcAmount);
     }
 }
@@ -179,8 +181,9 @@ abstract contract StateBorrowed is StateDeposited {
     function setUp() public override virtual {
         super.setUp();
 
-        // user borrows 1/2 of maxDebt
-        uint halfDebt = vault.getMaxDebt(user)/2;
+        // user borrows 1/2 of maximum possible debt
+        uint halfDebt = vault.collateralToDebt(vault.deposits(user)) / 2;
+
         vm.prank(user);
         vault.borrow(halfDebt);
         assertTrue(vault.debts(user) == halfDebt);
@@ -191,22 +194,21 @@ contract StateBorrowedTest is StateBorrowed {
 
     function testCannotBorrowExceedingMargin() public {
         console2.log("With existing debt, user should be unable to exceed margin limits");
-        uint maxDebt = vault.getMaxDebt(user);       
+        uint maxDebt = vault.collateralToDebt(vault.deposits(user));       
+
         vm.prank(user);
-        vm.expectRevert("Insufficient collateral!");
+        vm.expectRevert("Would become undercollateralized");
         vault.borrow(maxDebt*2);
     }
 
-    function testCannotWithdrawExceedingMargin(uint excessWithdrawl) public {
+    function testCannotWithdrawExceedingMargin() public {
         console2.log("With existing debt, user should be unable to withdraw in excess of required collateral");
-
-        uint collateralRequired = vault.getCollateralRequired(vault.debts(user));
-        uint spareDeposit = vault.deposits(user) - collateralRequired;
-        vm.assume(excessWithdrawl > spareDeposit);
-
+        uint collateralRequired = vault.minimumCollateral(user);
+        uint spareCollateral = vault.deposits(user) - collateralRequired;
+        
         vm.prank(user);
-        vm.expectRevert("Collateral unavailable!");
-        vault.withdraw(excessWithdrawl);
+        vm.expectRevert("Would become undercollateralized");
+        vault.withdraw(spareCollateral + 1);
     }
 
     function testCannotBeLiquidatedAtSamePrice() public {
@@ -214,6 +216,7 @@ contract StateBorrowedTest is StateBorrowed {
         uint userDebt = vault.debts(user);
         uint userDeposit = vault.deposits(user);
 
+        vm.expectRevert("Not undercollateralized");
         vault.liquidation(user);
         assertTrue(vault.deposits(user) == userDeposit);
         assertTrue(vault.debts(user) == userDebt);
@@ -256,14 +259,13 @@ contract StateRateChangeTest is StateRateChange {
 
     function testCannotBorrowFurtherOnRateChange() public {
         console2.log("Rate appreciates: User is unable to borrow another half of original debt amount due to rate change");
-        console2.log("Rate appreciates: Twice the amout of collateral is needed to support debt position. No free collateral.");
+        console2.log("Rate appreciates: Twice the amount of collateral is needed to support initial debt position. There is no free collateral.");
 
-        uint userDebt = vault.debts(user);
-        uint usedCollateral = vault.getCollateralRequired(userDebt);
-        assertEq(usedCollateral, 0.5 ether);
+        uint requiredCollateral = vault.minimumCollateral(user);
+        assertEq(requiredCollateral, 0.5 ether);
 
         vm.prank(user);
-        vm.expectRevert("Insufficient collateral!");
+        vm.expectRevert("Would become undercollateralized");
         vault.borrow(0.1 ether);
 
     }
@@ -286,15 +288,18 @@ contract StateRateChange2Test is StateRateChange2 {
     function testBorrowLessAtNewRate() public {
         console2.log("Rate appreciates: User can borrow a lesser amount of DAI than before");        
         
-        uint maxDebt = vault.getMaxDebt(user); 
+        //uint maxDebt = vault.getMaxDebt(user); 
+        uint maxDebt = vault.collateralToDebt(vault.deposits(user));
         uint userDebt = vault.debts(user);
 
+        uint spareDebt = maxDebt - userDebt;
+
         vm.expectEmit(true, true, false, true);
-        emit Borrow(address(usdc), user, maxDebt);
+        emit Borrow(address(usdc), user, spareDebt);
         
         vm.prank(user);
-        vault.borrow(maxDebt);
-        assertTrue(vault.debts(user) == userDebt + maxDebt);
+        vault.borrow(spareDebt);
+        assertTrue(vault.debts(user) == userDebt + spareDebt);
     }   
 
 }
@@ -318,9 +323,9 @@ contract StateLiquidatedTest is StateLiquidated {
         console2.log("Price appreciated significantly: user should be liquidated");
         uint userDebt = vault.debts(user);
         uint userDeposit = vault.deposits(user);
-
-        vm.expectEmit(true, true, false, true);
-        emit Liquidation(address(weth),address(usdc), user, userDebt, userDeposit);
+        
+        vm.expectEmit(true, true, true, true);
+        emit Liquidation(address(weth), address(usdc), user, userDebt, userDeposit);
 
         vault.liquidation(user);
         assertTrue(vault.deposits(user) == 0);
