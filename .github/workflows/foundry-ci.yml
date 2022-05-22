@@ -2,8 +2,8 @@ name: Foundry-CI
 
 on: 
   push:
-    branches:
-      - AddedCode
+    branches: 
+      - '*'
   pull_request:
 
 jobs:

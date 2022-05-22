@@ -26,36 +26,30 @@ contract Vault is Ownable {
     AggregatorV3Interface public immutable priceFeed;   
     
     ///@dev Emitted on deposit()
-    ///@param collateralAsset The address of the collateral asset
     ///@param user The address of the user calling deposit()
     ///@param collateralAmount The amount of collateral asset deposited
-    event Deposit(address indexed collateralAsset, address indexed user, uint collateralAmount);  
+    event Deposit(address indexed user, uint collateralAmount);  
 
     ///@dev Emitted on borrow()
-    ///@param debtAsset The address of the debt asset
     ///@param user The address of the user calling borrow()
     ///@param debtAmount The amount of debt asset borrowed
-    event Borrow(address indexed debtAsset, address indexed user, uint debtAmount); 
+    event Borrow(address indexed user, uint debtAmount); 
 
     ///@dev Emitted on repay()
-    ///@param debtAsset The address of the debt asset
     ///@param user The address of the user calling repay()
     ///@param debtAmount The amount of debt asset being repaid
-    event Repay(address indexed debtAsset, address indexed user, uint debtAmount);
+    event Repay(address indexed user, uint debtAmount);
 
     ///@dev Emitted on withdraw()
-    ///@param collateralAsset The address of the debt asset
     ///@param user The address of the user calling withdraw()
     ///@param collateralAmount The amount of collateral asset withdrawn
-    event Withdraw(address indexed collateralAsset, address indexed user, uint collateralAmount);  
+    event Withdraw(address indexed user, uint collateralAmount);  
 
     ///@dev Emitted on liquidation()
-    ///@param collateralAsset The address of the debt asset
-    ///@param debtAsset The address of the debt asset
     ///@param user The address of the user calling withdraw()
     ///@param debtToCover The amount of debt the liquidator wants to cover
     ///@param liquidatedCollateralAmount The amount of collateral received by the liquidator
-    event Liquidation(address indexed collateralAsset, address indexed debtAsset, address indexed user, uint debtToCover, uint liquidatedCollateralAmount);
+    event Liquidation(address indexed user, uint debtToCover, uint liquidatedCollateralAmount);
     
     ///@dev Returns decimal places of price as dictated by Chainlink Oracle
     uint public immutable scalarFactor;
@@ -87,7 +81,7 @@ contract Vault is Ownable {
 
         bool sent = collateral.transferFrom(msg.sender, address(this), collateralAmount);
         require(sent, "Deposit failed!");  
-        emit Deposit(address(collateral), msg.sender, collateralAmount);
+        emit Deposit(msg.sender, collateralAmount);
     }
     
     ///@notice Users borrow debt asset calculated based on collateralization level and their deposits 
@@ -100,7 +94,7 @@ contract Vault is Ownable {
         debts[msg.sender] = newDebt;
         bool sent = debt.transfer(msg.sender, debtAmount);
         require(sent, "Borrow failed!");       
-        emit Borrow(address(debt), msg.sender, debtAmount);
+        emit Borrow(msg.sender, debtAmount);
     }
 
     ///@notice Users repay their debt, in debt asset terms
@@ -111,7 +105,7 @@ contract Vault is Ownable {
 
         bool sent = debt.transferFrom(msg.sender, address(this), debtAmount);
         require(sent, "Repayment failed!");       
-        emit Repay(address(debt), msg.sender, debtAmount);   
+        emit Repay(msg.sender, debtAmount);   
     }
 
 
@@ -125,7 +119,7 @@ contract Vault is Ownable {
         deposits[msg.sender] = newDeposit;
         bool sent = collateral.transfer(msg.sender, collateralAmount);
         require(sent, "Withdraw failed!");
-        emit Withdraw(address(collateral), msg.sender, collateralAmount);            
+        emit Withdraw(msg.sender, collateralAmount);            
     }
 
 
@@ -205,7 +199,7 @@ contract Vault is Ownable {
 
         delete deposits[user];
         delete debts[user];
-        emit Liquidation(address(collateral), address(debt), user, userDebt, userDeposit); 
+        emit Liquidation(user, userDebt, userDeposit); 
 
     }
 }

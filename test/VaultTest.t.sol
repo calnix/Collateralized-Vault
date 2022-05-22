@@ -20,11 +20,11 @@ abstract contract StateZero is Test {
     address user;
     address deployer;
 
-    event Deposit(address indexed collateralAsset, address indexed user, uint collateralAmount);  
-    event Borrow(address indexed debtAsset, address indexed user, uint debtAmount); 
-    event Repay(address indexed debtAsset, address indexed user, uint debtAmount);
-    event Withdraw(address indexed collateralAsset, address indexed user, uint collateralAmount);  
-    event Liquidation(address indexed collateralAsset, address indexed debtAsset, address indexed user, uint debtToCover, uint liquidatedCollateralAmount);
+    event Deposit(address indexed user, uint collateralAmount);  
+    event Borrow(address indexed user, uint debtAmount); 
+    event Repay(address indexed user, uint debtAmount);
+    event Withdraw(address indexed user, uint collateralAmount);  
+    event Liquidation(address indexed user, uint debtToCover, uint liquidatedCollateralAmount);
 
 
     function setUp() public virtual {
@@ -81,8 +81,8 @@ contract StateZeroTest is StateZero {
         .with_key(address(user))            //set mapping key balanceOf(address(user))
         .checked_write(1 ether);           //data to be written to the storage slot -> balanceOf(address(user)) = 1 ether | assertTrue(weth.balanceOf(user) == 1 ether); 
 
-        vm.expectEmit(true, true, false, true);
-        emit Deposit(address(weth), user, 1 ether);
+        vm.expectEmit(true, false, false, true);
+        emit Deposit(user, 1 ether);
 
         weth.approve(address(vault), 1 ether);
         vault.deposit(1 ether);
@@ -152,8 +152,8 @@ contract StateDepositedTest is StateDeposited {
         uint userInitialDeposit = vault.deposits(user);
         vm.prank(user);
 
-        vm.expectEmit(true, true, false, true);
-        emit Withdraw(address(weth), user, wethAmount);
+        vm.expectEmit(true, false, false, true);
+        emit Withdraw(user, wethAmount);
     
         vault.withdraw(wethAmount);
 
@@ -168,8 +168,8 @@ contract StateDepositedTest is StateDeposited {
 
         usdcAmount = bound(usdcAmount, 0, maxDebt);
         
-        vm.expectEmit(true, true, false, true);
-        emit Borrow(address(usdc), user, usdcAmount);
+        vm.expectEmit(true, false, false, true);
+        emit Borrow(user, usdcAmount);
 
         vm.prank(user);
         vault.borrow(usdcAmount);
@@ -230,8 +230,8 @@ contract StateBorrowedTest is StateBorrowed {
         vm.assume(repayAmount > 0);
         
 
-        vm.expectEmit(true, true, false, true);
-        emit Repay(address(usdc), user, repayAmount);
+        vm.expectEmit(true, false, false, true);
+        emit Repay(user, repayAmount);
 
         vm.startPrank(user);
         usdc.approve(address(vault), repayAmount);
@@ -294,8 +294,8 @@ contract StateRateChange2Test is StateRateChange2 {
 
         uint spareDebt = maxDebt - userDebt;
 
-        vm.expectEmit(true, true, false, true);
-        emit Borrow(address(usdc), user, spareDebt);
+        vm.expectEmit(true, false, false, true);
+        emit Borrow(user, spareDebt);
         
         vm.prank(user);
         vault.borrow(spareDebt);
@@ -324,8 +324,8 @@ contract StateLiquidatedTest is StateLiquidated {
         uint userDebt = vault.debts(user);
         uint userDeposit = vault.deposits(user);
         
-        vm.expectEmit(true, true, true, true);
-        emit Liquidation(address(weth), address(usdc), user, userDebt, userDeposit);
+        vm.expectEmit(true, false, false, true);
+        emit Liquidation(user, userDebt, userDeposit);
 
         vault.liquidation(user);
         assertTrue(vault.deposits(user) == 0);
