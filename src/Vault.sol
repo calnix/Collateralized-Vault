@@ -4,19 +4,23 @@ pragma solidity ^0.8.0;
 import "lib/chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import "lib/yield-utils-v2/contracts/token/IERC20.sol";
 import "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
+import {TransferHelper} from "lib/yield-utils-v2/contracts/token/TransferHelper.sol";
 
 
 interface IERC20Decimals is IERC20 {
-    function decimals() external view returns (uint);
+
+    function decimals() external view returns (uint256);
 }
 
 contract Vault is Ownable {
+    ///@dev Attach library for safetransfer methods
+    using TransferHelper for IERC20Decimals;
 
     ///@dev Vault records collateral deposits of each user
-    mapping (address => uint) public deposits; 
+    mapping (address => uint256) public deposits; 
 
     ///@dev Vault records debt holdings of each user
-    mapping (address => uint) public debts;  
+    mapping (address => uint256) public debts;  
 
     ///@dev ERC20 interface specifying token contract functions
     IERC20Decimals public immutable collateral;    
@@ -28,35 +32,35 @@ contract Vault is Ownable {
     ///@dev Emitted on deposit()
     ///@param user The address of the user calling deposit()
     ///@param collateralAmount The amount of collateral asset deposited
-    event Deposit(address indexed user, uint collateralAmount);  
+    event Deposit(address indexed user, uint256 collateralAmount);  
 
     ///@dev Emitted on borrow()
     ///@param user The address of the user calling borrow()
     ///@param debtAmount The amount of debt asset borrowed
-    event Borrow(address indexed user, uint debtAmount); 
+    event Borrow(address indexed user, uint256 debtAmount); 
 
     ///@dev Emitted on repay()
     ///@param user The address of the user calling repay()
     ///@param debtAmount The amount of debt asset being repaid
-    event Repay(address indexed user, uint debtAmount);
+    event Repay(address indexed user, uint256 debtAmount);
 
     ///@dev Emitted on withdraw()
     ///@param user The address of the user calling withdraw()
     ///@param collateralAmount The amount of collateral asset withdrawn
-    event Withdraw(address indexed user, uint collateralAmount);  
+    event Withdraw(address indexed user, uint256 collateralAmount);  
 
     ///@dev Emitted on liquidation()
     ///@param user The address of the user calling withdraw()
     ///@param debtToCover The amount of debt the liquidator wants to cover
     ///@param liquidatedCollateralAmount The amount of collateral received by the liquidator
-    event Liquidation(address indexed user, uint debtToCover, uint liquidatedCollateralAmount);
+    event Liquidation(address indexed user, uint256 debtToCover, uint256 liquidatedCollateralAmount);
     
     ///@dev Returns decimal places of price as dictated by Chainlink Oracle
-    uint public immutable scalarFactor;
+    uint256 public immutable scalarFactor;
     
     ///@dev Returns decimal places of tokens as dictated by their respective contracts
-    uint public collateralDecimals;
-    uint public debtDecimals;
+    uint256 public collateralDecimals;
+    uint256 public debtDecimals;
 
     
     constructor(address dai_, address weth_, address priceFeedAddress) {
@@ -76,35 +80,32 @@ contract Vault is Ownable {
 
     ///@dev Users deposit collateral asset into Vault
     ///@param collateralAmount Amount of collateral to deposit
-    function deposit(uint collateralAmount) external {       
+    function deposit(uint256 collateralAmount) external {       
         deposits[msg.sender] += collateralAmount;
 
-        bool sent = collateral.transferFrom(msg.sender, address(this), collateralAmount);
-        require(sent, "Deposit failed!");  
+        collateral.safeTransferFrom(msg.sender, address(this), collateralAmount);
         emit Deposit(msg.sender, collateralAmount);
     }
     
     ///@notice Users borrow debt asset calculated based on collateralization level and their deposits 
     ///@dev See _isCollateralized() for collateralization calculation
     ///@param debtAmount Amount of debt asset to borrow
-    function borrow(uint debtAmount) external {      
-        uint newDebt = debts[msg.sender] + debtAmount;
+    function borrow(uint256 debtAmount) external {      
+        uint256 newDebt = debts[msg.sender] + debtAmount;
         require(_isCollateralized(newDebt, deposits[msg.sender]),"Would become undercollateralized");
         
         debts[msg.sender] = newDebt;
-        bool sent = debt.transfer(msg.sender, debtAmount);
-        require(sent, "Borrow failed!");       
+        debt.safeTransfer(msg.sender, debtAmount);
         emit Borrow(msg.sender, debtAmount);
     }
 
     ///@notice Users repay their debt, in debt asset terms
     ///@dev This covers partial and full repayment
     ///@param debtAmount Amount of debt asset to repay
-    function repay(uint debtAmount) external {
+    function repay(uint256 debtAmount) external {
         debts[msg.sender] -= debtAmount;
 
-        bool sent = debt.transferFrom(msg.sender, address(this), debtAmount);
-        require(sent, "Repayment failed!");       
+        debt.safeTransferFrom(msg.sender, address(this), debtAmount);
         emit Repay(msg.sender, debtAmount);   
     }
 
@@ -112,13 +113,12 @@ contract Vault is Ownable {
     ///@notice Users withdraw their deposited collateral
     ///@dev This covers partial and full withdrawals; checks if under-collateralization occurs before withdrawal
     ///@param collateralAmount Amount of collateral asset to withdraw
-    function withdraw(uint collateralAmount) external {       
-        uint newDeposit = deposits[msg.sender] - collateralAmount;
+    function withdraw(uint256 collateralAmount) external {       
+        uint256 newDeposit = deposits[msg.sender] - collateralAmount;
         require(_isCollateralized(debts[msg.sender], newDeposit),"Would become undercollateralized");
 
         deposits[msg.sender] = newDeposit;
-        bool sent = collateral.transfer(msg.sender, collateralAmount);
-        require(sent, "Withdraw failed!");
+        collateral.safeTransfer(msg.sender, collateralAmount);
         emit Withdraw(msg.sender, collateralAmount);            
     }
 
@@ -132,7 +132,7 @@ contract Vault is Ownable {
     ///@param debtAmount Amount of debt 
     ///@param collateralAmount Amount of collateral  
     ///@return collateralized True is debt can be supported
-    function _isCollateralized(uint debtAmount, uint collateralAmount) internal view returns(bool collateralized) {
+    function _isCollateralized(uint256 debtAmount, uint256 collateralAmount) internal view returns(bool collateralized) {
         return debtAmount == 0 || debtAmount <= _collateralToDebt(collateralAmount);
     }
         //Note: Conditions are evaluated sequentially.
@@ -147,16 +147,16 @@ contract Vault is Ownable {
     ///@dev For a given collateral amount, calculate the debt it can support at current market prices 
     ///@param collateralAmount Amount of collateral
     ///@return debtAmount Amount of debt
-    function _collateralToDebt(uint collateralAmount) internal view returns(uint debtAmount) {
+    function _collateralToDebt(uint256 collateralAmount) internal view returns(uint256 debtAmount) {
         (,int price,,,) = priceFeed.latestRoundData();
-        debtAmount = collateralAmount * scalarFactor / uint(price);
+        debtAmount = collateralAmount * scalarFactor / uint256(price);
         debtAmount = _scaleDecimals(debtAmount, debtDecimals, collateralDecimals);
     }
 
 
     ///@dev Calculates minimum collateral required of a user to support existing debts, at current market prices 
     ///@param user Address of user 
-    function minimumCollateral(address user) public view returns(uint collateralAmount) {
+    function minimumCollateral(address user) public view returns(uint256 collateralAmount) {
         collateralAmount = _debtToCollateral(debts[user]);
     }
 
@@ -164,9 +164,9 @@ contract Vault is Ownable {
     ///@notice Price is returned as an integer extending over it's decimal places
     ///@dev Calculates minimum collateral required to support given amount of debt, at current market prices 
     ///@param debtAmount Amount of debt
-    function _debtToCollateral(uint debtAmount) internal view returns(uint collateralAmount) {
+    function _debtToCollateral(uint256 debtAmount) internal view returns(uint256 collateralAmount) {
         (,int price,,,) = priceFeed.latestRoundData();
-        collateralAmount = debtAmount * uint(price) / scalarFactor;
+        collateralAmount = debtAmount * uint256(price) / scalarFactor;
         collateralAmount = _scaleDecimals(collateralAmount, collateralDecimals, debtDecimals);
     }
 
@@ -174,7 +174,7 @@ contract Vault is Ownable {
 
     ///@notice Rebasement is necessary when utilising assets with divergering decimal precision
     ///@dev For rebasement of the trailing zeros which are representative of decimal precision
-    function _scaleDecimals(uint integer, uint from, uint to) internal pure returns(uint) {
+    function _scaleDecimals(uint256 integer, uint256 from, uint256 to) internal pure returns(uint256) {
         //downscaling | 10^(to-from) => 10^(-ve) | cant have negative powers, bring down as division => integer / 10^(from - to)
         if (from > to ){ 
             return integer / 10**(from - to);
@@ -192,8 +192,8 @@ contract Vault is Ownable {
     ///@dev Can only be called by Vault owner; triggers liquidation check on supplied user address
     ///@param user Address of user to trigger liquidation check
     function liquidation(address user) external onlyOwner { 
-        uint userDebt = debts[user];             //saves an extra SLOAD
-        uint userDeposit = deposits[user];       //saves an extra SLOAD
+        uint256 userDebt = debts[user];             //saves an extra SLOAD
+        uint256 userDeposit = deposits[user];       //saves an extra SLOAD
 
         require(!_isCollateralized(userDebt, userDeposit), "Not undercollateralized");
 
